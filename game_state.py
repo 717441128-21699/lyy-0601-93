@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 from game_data import (
     DIFFICULTY_CONFIG, ITEMS, RECIPES, MAP_LOCATIONS, 
-    EVENTS, COMPANIONS, TRADER_ITEMS, ENDINGS
+    EVENTS, COMPANIONS, TRADER_ITEMS, ENDINGS, RUIN_CLUES, CAMP_UPGRADES
 )
 
 SAVE_DIR = "saves"
@@ -36,6 +36,11 @@ class GameState:
             "has_storage": False,
             "defense_level": 0,
             "torches": 0,
+            "shelter_level": 0,
+            "fire_level": 0,
+            "storage_level": 0,
+            "water_filter_level": 0,
+            "defense_upgrade_level": 0,
         }
         self.is_poisoned = False
         self.poison_damage = 0
@@ -44,6 +49,9 @@ class GameState:
         self.total_map_fragments = 5
         self.boat_parts = 0
         self.total_boat_parts = 3
+        self.ruin_clues = {}
+        self.ruin_exploration_progress = 0
+        self.battle_log = []
         self.score = 0
         self.death_cause = None
         self.game_over = False
@@ -325,13 +333,100 @@ class GameState:
             return f"你死了！原因：{ending_data['name']}\n{ending_data['description']}"
         return None
 
+    def discover_clue(self, clue_id):
+        if clue_id in RUIN_CLUES and clue_id not in self.ruin_clues:
+            self.ruin_clues[clue_id] = {"discovered": True, "day": self.day}
+            self.ruin_exploration_progress = len(self.ruin_clues)
+            return True
+        return False
+    
+    def get_available_clues(self):
+        available = []
+        for clue_id, clue_data in RUIN_CLUES.items():
+            if clue_id not in self.ruin_clues:
+                requires = clue_data.get("requires", [])
+                if all(req in self.ruin_clues for req in requires):
+                    available.append(clue_id)
+        return available
+    
+    def get_clue_effect(self, effect_name):
+        value = 0
+        for clue_id in self.ruin_clues:
+            clue_data = RUIN_CLUES.get(clue_id, {})
+            if effect_name in clue_data.get("effect", {}):
+                value += clue_data["effect"][effect_name]
+        return value
+    
+    def get_camp_upgrade_level(self, facility_id):
+        level_key = f"{facility_id}_level"
+        return self.camp.get(level_key, 0)
+    
+    def can_upgrade_facility(self, facility_id):
+        if facility_id not in CAMP_UPGRADES:
+            return False, "未知设施"
+        
+        facility = CAMP_UPGRADES[facility_id]
+        current_level = self.get_camp_upgrade_level(facility_id)
+        
+        if current_level >= facility["max_level"]:
+            return False, "已达最高等级"
+        
+        if "requires" in facility:
+            required_facility = facility["requires"]
+            if self.get_camp_upgrade_level(required_facility) < 1:
+                return False, f"需要先建造{CAMP_UPGRADES[required_facility]['name']}"
+        
+        next_level = facility["levels"][current_level]
+        for material, cost in next_level["cost"].items():
+            if not self.has_item(material, cost):
+                material_name = ITEMS.get(material, {}).get("name", material)
+                return False, f"材料不足：{material_name} x{cost}"
+        
+        return True, next_level
+    
+    def upgrade_facility(self, facility_id):
+        success, result = self.can_upgrade_facility(facility_id)
+        if not success:
+            return False, result
+        
+        next_level = result
+        for material, cost in next_level["cost"].items():
+            self.remove_item(material, cost)
+        
+        level_key = f"{facility_id}_level"
+        self.camp[level_key] = next_level["level"]
+        
+        if facility_id == "shelter":
+            self.camp["built"] = True
+        elif facility_id == "fire":
+            self.camp["has_fire"] = True
+        elif facility_id == "water_filter":
+            self.camp["has_water_filter"] = True
+        elif facility_id == "storage":
+            self.camp["has_storage"] = True
+        elif facility_id == "defense":
+            self.camp["defense_level"] = next_level["level"]
+        
+        return True, next_level
+    
+    def log_battle(self, message):
+        self.battle_log.append(message)
+    
+    def clear_battle_log(self):
+        self.battle_log = []
+    
     def calculate_score(self):
         base_score = ENDINGS.get(self.ending, {}).get("score", 0)
         survival_bonus = self.day * 2
         companion_bonus = len(self.companions) * 10
         map_bonus = self.map_fragments * 5
+        clue_bonus = sum(RUIN_CLUES.get(c, {}).get("score_bonus", 0) for c in self.ruin_clues)
+        facility_bonus = sum(
+            self.get_camp_upgrade_level(f) * 5 
+            for f in ["shelter", "fire", "storage", "water_filter", "defense"]
+        )
         difficulty_multiplier = {"easy": 0.8, "normal": 1.0, "hard": 1.5, "nightmare": 2.0}[self.difficulty]
-        self.score = int((base_score + survival_bonus + companion_bonus + map_bonus) * difficulty_multiplier)
+        self.score = int((base_score + survival_bonus + companion_bonus + map_bonus + clue_bonus + facility_bonus) * difficulty_multiplier)
 
     def save_game(self, slot_name):
         if not os.path.exists(SAVE_DIR):
@@ -367,6 +462,9 @@ class GameState:
             "trader_available": self.trader_available,
             "weather": self.weather,
             "weather_forecast": self.weather_forecast,
+            "ruin_clues": self.ruin_clues,
+            "ruin_exploration_progress": self.ruin_exploration_progress,
+            "battle_log": self.battle_log,
             "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
@@ -412,6 +510,9 @@ class GameState:
         self.trader_available = data.get("trader_available", False)
         self.weather = data.get("weather", "clear")
         self.weather_forecast = data.get("weather_forecast", None)
+        self.ruin_clues = data.get("ruin_clues", {})
+        self.ruin_exploration_progress = data.get("ruin_exploration_progress", 0)
+        self.battle_log = data.get("battle_log", [])
         
         self._sync_map_fragments()
         

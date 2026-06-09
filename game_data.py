@@ -296,6 +296,108 @@ TRADER_ITEMS = {
     }
 }
 
+RUIN_CLUES = {
+    "old_camp": {
+        "name": "旧营地遗迹",
+        "description": "你发现了一个废弃的营地，看起来是之前遇难者留下的。",
+        "discovery_chance": 0.25,
+        "effect": {"bonus_find_cache": 0.3},
+        "score_bonus": 10,
+        "unlocks": ["diary_note"],
+    },
+    "secret_chamber": {
+        "name": "神秘密室",
+        "description": "你发现了一个隐藏的密室，墙上刻满了奇怪的符号。",
+        "discovery_chance": 0.2,
+        "requires": ["old_camp"],
+        "effect": {"map_fragment_bonus": 0.2},
+        "score_bonus": 15,
+        "unlocks": ["treasure_hint"],
+    },
+    "trap_mechanism": {
+        "name": "古代机关",
+        "description": "你发现了一个复杂的机关装置，似乎需要特定的方法才能触发。",
+        "discovery_chance": 0.15,
+        "requires": ["secret_chamber"],
+        "effect": {"trap_damage_reduction": 0.5},
+        "score_bonus": 20,
+    },
+    "diary_note": {
+        "name": "探险日记",
+        "description": "一本破旧的日记，记录了前人在岛上的经历。",
+        "discovery_chance": 0.2,
+        "requires": ["old_camp"],
+        "effect": {"companion_recruit_bonus": 0.2},
+        "score_bonus": 10,
+    },
+    "treasure_map": {
+        "name": "藏宝图残页",
+        "description": "一张残缺的地图，上面标注了宝藏的大致位置。",
+        "discovery_chance": 0.1,
+        "requires": ["secret_chamber", "diary_note"],
+        "effect": {"guaranteed_map_fragment": True},
+        "score_bonus": 25,
+    },
+    "ancient_statue": {
+        "name": "古代雕像",
+        "description": "一座神秘的雕像，似乎在守护着什么重要的东西。",
+        "discovery_chance": 0.12,
+        "requires": ["secret_chamber"],
+        "effect": {"night_defense_bonus": 0.2},
+        "score_bonus": 15,
+    },
+}
+
+CAMP_UPGRADES = {
+    "shelter": {
+        "name": "营地",
+        "levels": [
+            {"level": 1, "name": "简易营地", "cost": {"wood": 10, "stone": 5, "rope": 2}, "benefit": "提供基本庇护，夜间恢复+5生命", "unlocks": ["fire", "storage"]},
+            {"level": 2, "name": "加固营地", "cost": {"wood": 15, "stone": 10, "rope": 3}, "benefit": "更坚固的庇护，夜间恢复+8生命，防御+10", "unlocks": ["defense"]},
+            {"level": 3, "name": "坚固堡垒", "cost": {"wood": 20, "stone": 20, "rope": 5, "iron_ingot": 2}, "benefit": "非常坚固，夜间恢复+12生命，防御+20，下雨也能休息", "unlocks": []},
+        ],
+        "max_level": 3,
+    },
+    "fire": {
+        "name": "火源",
+        "levels": [
+            {"level": 1, "name": "篝火", "cost": {"wood": 5, "flint": 2}, "benefit": "可以烹饪食物和净化水，夜间恢复+3生命", "unlocks": ["water_filter", "cooking"]},
+            {"level": 2, "name": "石砌炉灶", "cost": {"stone": 10, "wood": 5}, "benefit": "烹饪效率+50%，消耗木材减少，夜间恢复+5生命", "unlocks": ["smelting"]},
+            {"level": 3, "name": "砖石壁炉", "cost": {"stone": 20, "brick": 5, "iron_ingot": 1}, "benefit": "烹饪效率+100%，提供更好的照明，夜间恢复+8生命", "unlocks": []},
+        ],
+        "max_level": 3,
+        "requires": "shelter",
+    },
+    "storage": {
+        "name": "仓库",
+        "levels": [
+            {"level": 1, "name": "简易货架", "cost": {"wood": 15, "rope": 3}, "benefit": "物品整理更有序，采集效率+10%", "unlocks": []},
+            {"level": 2, "name": "木板仓库", "cost": {"wood": 25, "rope": 5, "iron_ingot": 1}, "benefit": "更大的存储空间，采集效率+20%，物品不会因潮湿损坏", "unlocks": []},
+        ],
+        "max_level": 2,
+        "requires": "shelter",
+    },
+    "water_filter": {
+        "name": "净水器",
+        "levels": [
+            {"level": 1, "name": "简易过滤器", "cost": {"wood": 5, "stone": 10, "fiber": 10}, "benefit": "净化脏水获得2倍净水", "unlocks": []},
+            {"level": 2, "name": "多级过滤系统", "cost": {"stone": 15, "fiber": 20, "charcoal": 5}, "benefit": "净化脏水获得3倍净水，可收集雨水", "unlocks": []},
+        ],
+        "max_level": 2,
+        "requires": "fire",
+    },
+    "defense": {
+        "name": "防御设施",
+        "levels": [
+            {"level": 1, "name": "尖刺围栏", "cost": {"wood": 10, "stone": 15, "rope": 2}, "benefit": "夜间防御+10，野兽袭击概率-10%", "unlocks": []},
+            {"level": 2, "name": "围墙", "cost": {"stone": 25, "wood": 15, "rope": 3}, "benefit": "夜间防御+25，野兽袭击概率-25%", "unlocks": []},
+            {"level": 3, "name": "瞭望塔", "cost": {"wood": 30, "stone": 30, "rope": 5, "iron_ingot": 2}, "benefit": "夜间防御+50，野兽袭击概率-50%，提前预警", "unlocks": []},
+        ],
+        "max_level": 3,
+        "requires": "shelter",
+    },
+}
+
 ENDINGS = {
     "rescue": {
         "name": "成功获救",
