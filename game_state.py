@@ -305,46 +305,184 @@ class GameState:
     def night_phase(self):
         messages = ["夜幕降临..."]
         config = DIFFICULTY_CONFIG[self.difficulty]
+        self.clear_battle_log()
         
         if self.current_location != "camp":
             messages.append("你在野外过夜，非常危险！")
             self.health -= 10
             messages.append("野外的寒冷和危险造成 10 点伤害！")
+            self.log_battle("夜幕降临...")
+            self.log_battle("你在野外过夜，非常危险！")
+            self.log_battle("野外的寒冷和危险造成 10 点伤害！")
+            return messages
         
-        if self.camp["torches"] > 0:
+        torches = self.camp["torches"]
+        torch_used = 0
+        if torches > 0:
             self.camp["torches"] -= 1
+            torch_used = 1
             messages.append(f"火把燃烧了一夜，还剩 {self.camp['torches']} 个。")
         
-        if random.random() < config["night_attack_chance"]:
-            if self.camp["defense_level"] > 0:
-                defense = self.camp["defense_level"] * 5
-                if self.camp["torches"] > 0:
-                    defense += 20
-                if random.randint(0, 50) < defense:
-                    messages.append("营地的防御设施挡住了野兽的袭击！")
-                else:
-                    damage = random.randint(10, 25) - defense // 5
-                    damage = max(5, damage)
-                    self.health -= damage
-                    messages.append(f"野兽突破了防线，造成 {damage} 点伤害！")
-            else:
-                damage = random.randint(15, 30)
-                total_attack = self.get_total_attack()
-                if total_attack > 20 and random.random() < 0.5:
-                    damage = damage // 2
-                    messages.append(f"你奋力抵抗野兽，受到 {damage} 点伤害。")
-                else:
-                    self.health -= damage
-                    messages.append(f"野兽袭击了你，造成 {damage} 点伤害！")
+        # 计算防御和袭击概率 - 与 camp defend 保持一致
+        facility_defense = self.get_facility_effect("defense")
+        clue_defense_bonus = self.get_clue_effect("night_defense_bonus")
+        camp_defense = int(facility_defense * (1 + clue_defense_bonus))
+        defense_level = self.get_camp_upgrade_level("defense")
         
-        if self.current_location == "camp":
-            heal_amount = 5
+        attack_reduction = self.get_facility_effect("attack_reduction")
+        torch_bonus = torches * 5
+        
+        # 计算武器和伙伴战斗力
+        total_attack = 5
+        weapons_used = []
+        for weapon_id in ["spear", "bow", "iron_sword"]:
+            if self.has_item(weapon_id):
+                wep = ITEMS[weapon_id]
+                total_attack += wep.get("attack", 0)
+                weapons_used.append(wep["name"])
+        
+        companion_names = []
+        for comp in self.companions:
+            comp_data = COMPANIONS[comp]
+            total_attack += comp_data["stats"].get("attack", 0)
+            companion_names.append(comp_data["name"])
+        
+        # 记录战斗日志头部
+        self.log_battle("=== 夜间战斗 ===")
+        self.log_battle(f"第 {self.day} 天夜晚")
+        self.log_battle(f"  武器: {', '.join(weapons_used) if weapons_used else '无'}")
+        self.log_battle(f"  伙伴: {', '.join(companion_names) if companion_names else '无'}")
+        self.log_battle(f"  营地: 防御等级{defense_level} (防御+{camp_defense}, 袭击概率-{int(attack_reduction*100)}%)")
+        self.log_battle(f"  火把: {torches}个 (惊吓加成+{torch_bonus})")
+        self.log_battle(f"  总战斗力: {total_attack} 攻击 / {camp_defense + torch_bonus} 防御")
+        
+        if torch_used > 0:
+            self.log_battle("  消耗: 点燃1个火把")
+        
+        # 计算袭击概率
+        base_attack_chance = config["night_attack_chance"]
+        attack_chance = base_attack_chance
+        
+        torch_reduction = 0.0
+        if torches > 0:
+            torch_reduction = 0.3
+            attack_chance *= (1 - torch_reduction)
+        
+        if defense_level > 0:
+            attack_chance *= (1 - attack_reduction)
+        
+        self.log_battle("【战斗阶段】")
+        self.log_battle(f"  基础袭击概率: {int(base_attack_chance * 100)}%")
+        if torch_reduction > 0:
+            self.log_battle(f"  火把降低: -{int(torch_reduction * 100)}%")
+        if attack_reduction > 0:
+            self.log_battle(f"  防御设施降低: -{int(attack_reduction * 100)}%")
+        self.log_battle(f"  最终袭击概率: {int(attack_chance * 100)}%")
+        
+        old_health = self.health
+        total_damage_taken = 0
+        
+        if random.random() < attack_chance:
+            # 发生袭击 - 使用完整的减伤链计算
+            beast_types = [
+                ("狼群", 30, 15, 25),
+                ("野猪", 25, 10, 20),
+                ("巨蛇", 20, 15, 30),
+                ("豹子", 35, 20, 35),
+                ("熊", 50, 25, 40),
+            ]
+            beast_name, beast_hp, min_dmg, max_dmg = random.choice(beast_types)
+            
+            messages.append(f"⚠️  一群{beast_name}袭击了营地！")
+            self.log_battle(f"  袭击: {beast_name}出现 (生命{beast_hp}, 攻击{min_dmg}-{max_dmg})")
+            self.log_event(f"夜间袭击: {beast_name}出现")
+            
+            beast_current_hp = beast_hp
+            round_num = 1
+            
+            while beast_current_hp > 0 and self.health > 0 and round_num <= 5:
+                self.log_battle(f"--- 第{round_num}回合战斗 ---")
+                
+                # 玩家攻击
+                player_damage = random.randint(max(1, total_attack - 5), total_attack + 5)
+                beast_current_hp -= player_damage
+                self.log_battle(f"  玩家攻击: 造成 {player_damage} 点伤害，野兽剩余{max(0, beast_current_hp)}生命")
+                
+                if beast_current_hp <= 0:
+                    self.log_battle(f"  野兽被击败了！")
+                    messages.append(f"你击退了{beast_name}！")
+                    break
+                
+                # 野兽攻击 - 完整减伤链
+                beast_damage_raw = random.randint(min_dmg, max_dmg)
+                self.log_battle(f"  野兽攻击: 原始伤害 {beast_damage_raw}")
+                
+                camp_reduction = camp_defense / 100 if camp_defense > 0 else 0
+                beast_after_camp = int(beast_damage_raw * (1 - camp_reduction))
+                camp_reduced = beast_damage_raw - beast_after_camp
+                self.log_battle(f"  营地减伤: -{camp_reduced} (防御{camp_defense}，减免{int(camp_reduction*100)}%)")
+                
+                torch_reduction_pct = torch_bonus / 100 if torch_bonus > 0 else 0
+                beast_after_torch = int(beast_after_camp * (1 - torch_reduction_pct))
+                torch_reduced = beast_after_camp - beast_after_torch
+                self.log_battle(f"  火把减伤: -{torch_reduced} (惊吓{torch_bonus}，减免{int(torch_reduction_pct*100)}%)")
+                
+                # 伙伴减伤
+                companion_reduced = 0
+                for comp in self.companions:
+                    comp_def = COMPANIONS[comp]["stats"].get("defense", 0)
+                    if comp_def > 0:
+                        comp_reduction = min(beast_after_torch, random.randint(1, comp_def))
+                        companion_reduced += comp_reduction
+                        beast_after_torch -= comp_reduction
+                        self.log_battle(f"  伙伴{COMPANIONS[comp]['name']}抵挡: -{comp_reduction}")
+                
+                final_damage = max(0, beast_after_torch)
+                self.health -= final_damage
+                total_damage_taken += final_damage
+                self.log_battle(f"  实际扣血: -{final_damage} (当前生命: {max(0, self.health)})")
+                
+                messages.append(f"第{round_num}回合: {beast_name}造成 {final_damage} 点伤害！")
+                
+                round_num += 1
+            
+            if self.health <= 0:
+                self.death_cause = "killed_by_beast"
+                messages.append(f"你被{beast_name}击败了...")
+                self.log_event(f"战斗死亡: 被{beast_name}击败，受到{total_damage_taken}点伤害")
+        else:
+            # 平安无事
+            messages.append("🌙 今夜平安无事，只有虫鸣声和海浪声...")
+            self.log_battle("  结果: 今夜平安无事")
+            
+            # 夜间恢复
+            night_heal = self.get_facility_effect("night_heal")
             for comp in self.companions:
-                heal_amount += COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 5
-            if self.camp["has_fire"]:
-                heal_amount += 5
-            self.health = min(self.max_health, self.health + heal_amount)
-            messages.append(f"你在营地休息，恢复了 {heal_amount} 点生命值。")
+                night_heal += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 5)
+            
+            shelter_level = self.get_camp_upgrade_level("shelter")
+            fire_level = self.get_camp_upgrade_level("fire")
+            
+            old_hp = self.health
+            self.health = min(self.max_health, self.health + night_heal)
+            actual_heal = self.health - old_hp
+            
+            heal_details = []
+            if shelter_level > 0:
+                shelter_heal = CAMP_UPGRADES["shelter"]["levels"][shelter_level-1]["effects"].get("night_heal", 0)
+                heal_details.append(f"营地+{shelter_heal}")
+            if fire_level > 0:
+                fire_heal = CAMP_UPGRADES["fire"]["levels"][fire_level-1]["effects"].get("night_heal", 0)
+                heal_details.append(f"火源+{fire_heal}")
+            
+            messages.append(f"你在营地休息，恢复了 {actual_heal} 点生命值。")
+            if heal_details:
+                messages[-1] += f" ({', '.join(heal_details)})"
+            
+            self.log_battle(f"  夜间恢复: +{actual_heal} 生命")
+            self.log_event(f"夜间平安，恢复{actual_heal}点生命")
+        
+        self.log_action(f"夜间防守: {'遭遇战斗' if old_health != self.health else '平安无事'}")
         
         return messages
 

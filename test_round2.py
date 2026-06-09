@@ -94,6 +94,10 @@ def main():
     game.new_game("测试玩家", "normal")
     handler.handle("map", ["go", "camp"])
     
+    # 增加生命值防止死亡
+    game.health = 200
+    game.max_health = 200
+    
     # 添加大量材料
     game.add_item("wood", 100)
     game.add_item("stone", 100)

@@ -586,15 +586,38 @@ save - 存档系统
             text += "🔥 点燃了1个火把，照亮了营地周围...\n\n"
             self.game.log_battle("  消耗: 点燃1个火把")
         
-        # 判断是否有袭击
-        attack_chance = config["night_attack_chance"]
+        # 判断是否有袭击 - 按防御等级拉开概率
+        base_attack_chance = config["night_attack_chance"]
+        attack_chance = base_attack_chance
+        
+        # 火把减伤概率
+        torch_reduction = 0.0
         if torches > 0:
-            attack_chance *= 0.7
-        if camp_defense > 0:
-            attack_chance *= 0.8
+            torch_reduction = 0.3
+            attack_chance *= (1 - torch_reduction)
+        
+        # 防御设施按等级降低袭击概率
+        attack_reduction = self.game.get_facility_effect("attack_reduction")
+        defense_level = self.game.get_camp_upgrade_level("defense")
+        if defense_level > 0:
+            attack_chance *= (1 - attack_reduction)
         
         text += "【战斗阶段】\n"
+        text += f"  基础袭击概率: {int(base_attack_chance * 100)}%\n"
+        if torch_reduction > 0:
+            text += f"  火把降低: -{int(torch_reduction * 100)}%\n"
+        if attack_reduction > 0:
+            defense_name = CAMP_UPGRADES["defense"]["levels"][defense_level - 1]["name"]
+            text += f"  防御设施({defense_name}): -{int(attack_reduction * 100)}%\n"
+        text += f"  最终袭击概率: {int(attack_chance * 100)}%\n\n"
+        
         self.game.log_battle("【战斗阶段】")
+        self.game.log_battle(f"  基础袭击概率: {int(base_attack_chance * 100)}%")
+        if torch_reduction > 0:
+            self.game.log_battle(f"  火把降低: -{int(torch_reduction * 100)}%")
+        if attack_reduction > 0:
+            self.game.log_battle(f"  防御设施降低: -{int(attack_reduction * 100)}%")
+        self.game.log_battle(f"  最终袭击概率: {int(attack_chance * 100)}%")
         
         old_health = self.game.health
         total_damage_taken = 0
@@ -1109,35 +1132,67 @@ save - 存档系统
             if not self.game.camp["has_fire"]:
                 return "需要先生火才能烹饪。"
             
-            raw_items = [("raw_meat", "生肉"), ("raw_fish", "生鱼")]
+            cooking_bonus = self.game.get_facility_effect("cooking_bonus")
+            fire_level = self.game.get_camp_upgrade_level("fire")
+            fire_name = CAMP_UPGRADES["fire"]["levels"][fire_level - 1]["name"] if fire_level > 0 else "无火源"
+            
+            if len(args) > 1:
+                target_raw = args[1]
+                if target_raw not in ["raw_meat", "raw_fish"]:
+                    return "用法：camp cook [raw_meat|raw_fish] [数量]\n可烹饪物品：raw_meat (生肉), raw_fish (生鱼)"
+                raw_items = [(target_raw, "生肉" if target_raw == "raw_meat" else "生鱼")]
+            else:
+                raw_items = [("raw_meat", "生肉"), ("raw_fish", "生鱼")]
+            
+            max_count = None
+            if len(args) > 2:
+                success, result = parse_int_param(args[2], min_val=1, param_name="烹饪数量")
+                if not success:
+                    return result
+                max_count = result
+            
             cooked = False
             text = ""
             
-            cooking_bonus = self.game.get_facility_effect("cooking_bonus")
             bonus_text = f" (烹饪效率+{int(cooking_bonus*100)}%)" if cooking_bonus > 0 else ""
+            base_output = 1
+            bonus_output = max(0, round(base_output * cooking_bonus))
+            per_unit_output = base_output + bonus_output
+            
+            text += f"【火源等级】{fire_name}，烹饪效率+{int(cooking_bonus*100)}%\n"
+            text += f"【单份产出】基础1 + 加成{bonus_output} = 总计{per_unit_output}份食物\n\n"
             
             total_raw = 0
             total_food = 0
+            total_bonus = 0
             
             for raw_id, raw_name in raw_items:
-                while self.game.has_item(raw_id):
+                count = 0
+                while self.game.has_item(raw_id) and (max_count is None or count < max_count):
                     self.game.remove_item(raw_id, 1)
-                    base_output = 1
-                    bonus_output = int(base_output * cooking_bonus)
                     total_output = base_output + bonus_output
                     self.game.add_item("food", total_output)
                     if bonus_output > 0:
-                        text += f"烹饪 {raw_name} -> 食物 x{total_output} (+{bonus_output}效率加成)\n"
+                        text += f"  烹饪 {raw_name} -> 食物 x{total_output} (+{bonus_output}加成)\n"
                     else:
-                        text += f"烹饪 {raw_name} -> 食物 x{total_output}\n"
+                        text += f"  烹饪 {raw_name} -> 食物 x{total_output}\n"
                     total_raw += 1
                     total_food += total_output
+                    total_bonus += bonus_output
+                    count += 1
                     cooked = True
+                    if max_count is not None and count >= max_count:
+                        break
             
             if not cooked:
                 return "没有可烹饪的生肉或生鱼。"
             
-            text += f"\n总计：{total_raw}份原料 -> {total_food}份食物{bonus_text}"
+            text += f"\n【烹饪汇总】\n"
+            text += f"  原料消耗：{total_raw}份\n"
+            text += f"  基础产出：{total_raw * base_output}份食物\n"
+            if total_bonus > 0:
+                text += f"  效率加成：+{total_bonus}份食物{bonus_text}\n"
+            text += f"  最终获得：{total_food}份食物\n"
             
             self.game.log_action(f"烹饪食物: {total_raw}份原料 -> {total_food}份食物")
             advance_msg = self.game.advance_turn(1)
@@ -1800,12 +1855,27 @@ save - 存档系统
             
             if self.game.current_location != "camp":
                 heal_per_turn = 2
+                heal_detail = "野外基础恢复 2"
             else:
-                heal_per_turn = 5
-                if self.game.camp["has_fire"]:
-                    heal_per_turn += 2
+                shelter_heal = self.game.get_facility_effect("night_heal")
+                fire_heal = 0
+                if self.game.get_camp_upgrade_level("fire") > 0:
+                    fire_level_data = CAMP_UPGRADES["fire"]["levels"][self.game.get_camp_upgrade_level("fire") - 1]
+                    fire_heal = fire_level_data["effects"].get("night_heal", 0)
+                shelter_only_heal = max(0, shelter_heal - fire_heal)
+                
+                companion_heal = 0
+                companion_detail = ""
                 for comp in self.game.companions:
-                    heal_per_turn += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 3)
+                    comp_heal = int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 3)
+                    companion_heal += comp_heal
+                    if comp_heal > 0:
+                        companion_detail += f"+{comp_heal}({COMPANIONS[comp]['name']}) "
+                
+                heal_per_turn = shelter_heal + companion_heal
+                heal_detail = f"营地{shelter_only_heal} + 火源{fire_heal}"
+                if companion_heal > 0:
+                    heal_detail += f" + 伙伴{companion_heal} {companion_detail.strip()}"
             
             old_health_before = self.game.health
             self.game.health = min(self.game.max_health, self.game.health + heal_per_turn)
@@ -1813,6 +1883,9 @@ save - 存档系统
             summary["total_heal"] += actual_heal
             
             turn_log.append(f"  恢复生命值 +{actual_heal}")
+            turn_log.append(f"    恢复构成: {heal_detail} = {heal_per_turn}")
+            if actual_heal < heal_per_turn:
+                turn_log.append(f"    注: 生命已满，实际恢复{actual_heal}")
             
             advance_msg = self.game.advance_turn(1)
             
@@ -1821,7 +1894,7 @@ save - 存档系统
                 turn_log.append(f"  生命变化: {health_change:+d}")
             
             if self.game.weather != "clear":
-                weather_names = {"storm": "暴风雨", "heatwave": "热浪", "cold_snap": "寒流"}
+                weather_names = {"storm": "暴风雨", "heatwave": "热浪", "cold_snap": "寒流", "rain": "降雨"}
                 summary["weather_effects"].append(f"第{turn}回合: {weather_names.get(self.game.weather, '恶劣天气')}")
             
             if advance_msg:
@@ -1845,6 +1918,16 @@ save - 存档系统
         
         text += "\n=== 休息汇总 ===\n"
         text += f"总恢复生命值: +{summary['total_heal']}\n"
+        
+        if self.game.current_location == "camp":
+            shelter_lv = self.game.get_camp_upgrade_level("shelter")
+            fire_lv = self.game.get_camp_upgrade_level("fire")
+            if shelter_lv > 0:
+                shelter_name = CAMP_UPGRADES["shelter"]["levels"][shelter_lv - 1]["name"]
+                text += f"  营地等级: {shelter_name} (Lv.{shelter_lv})\n"
+            if fire_lv > 0:
+                fire_name = CAMP_UPGRADES["fire"]["levels"][fire_lv - 1]["name"]
+                text += f"  火源等级: {fire_name} (Lv.{fire_lv})\n"
         
         if summary["weather_effects"]:
             text += "\n天气影响：\n"
