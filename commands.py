@@ -559,19 +559,22 @@ save - 存档系统
         
         total_attack = player_attack + companion_attack
         
-        # 营地防御
-        camp_defense = self.game.camp["defense_level"] * 10
-        camp_defense = int(camp_defense * (1 + clue_defense_bonus))
+        # 营地防御 - 使用新的设施效果系统
+        facility_defense = self.game.get_facility_effect("defense")
+        camp_defense = int(facility_defense * (1 + clue_defense_bonus))
+        defense_level = self.game.get_camp_upgrade_level("defense")
+        
+        attack_reduction = self.game.get_facility_effect("attack_reduction")
         torches = self.game.camp["torches"]
         torch_bonus = torches * 5
         
         text += f"  武器: {', '.join(weapons_used) if weapons_used else '无'}\n"
         text += f"  伙伴: {', '.join(companion_names) if companion_names else '无'} ({companion_info})\n"
-        text += f"  营地: 防御等级{self.game.camp['defense_level']} (防御+{camp_defense})\n"
+        text += f"  营地: 防御等级{defense_level} (防御+{camp_defense}, 袭击概率-{int(attack_reduction*100)}%)\n"
         text += f"  火把: {torches}个 (惊吓加成+{torch_bonus})\n"
         text += f"  总战斗力: {total_attack} 攻击 / {camp_defense + torch_bonus} 防御\n\n"
         
-        self.game.log_battle(f"  营地: 防御等级{self.game.camp['defense_level']} (防御+{camp_defense})")
+        self.game.log_battle(f"  营地: 防御等级{defense_level} (防御+{camp_defense}, 袭击概率-{int(attack_reduction*100)}%)")
         self.game.log_battle(f"  火把: {torches}个 (惊吓加成+{torch_bonus})")
         self.game.log_battle(f"  总战斗力: {total_attack} 攻击 / {camp_defense + torch_bonus} 防御")
         
@@ -647,38 +650,53 @@ save - 存档系统
                 beast_damage_raw = random.randint(min_dmg, max_dmg)
                 round_log.append(f"  野兽攻击: 原始伤害 {beast_damage_raw}")
                 
-                # 防御减伤 - 固定百分比
-                defense_reduction = (camp_defense + torch_bonus) / 100
-                beast_damage_after_defense = int(beast_damage_raw * (1 - defense_reduction))
-                defense_reduced = beast_damage_raw - beast_damage_after_defense
-                round_log.append(f"  防御减伤: -{defense_reduced} (营地+火把共减免{int(defense_reduction*100)}%)")
+                # 营地防御减伤 - 单独计算
+                camp_reduction = camp_defense / 100
+                beast_after_camp = int(beast_damage_raw * (1 - camp_reduction))
+                camp_reduced = beast_damage_raw - beast_after_camp
+                round_log.append(f"  营地减伤: -{camp_reduced} (防御{camp_defense}，减免{int(camp_reduction*100)}%)")
                 
-                # 伙伴减伤 - 固定百分比
-                beast_damage_after_companion = int(beast_damage_after_defense * (1 - companion_defense))
-                companion_reduced = beast_damage_after_defense - beast_damage_after_companion
+                # 火把减伤 - 单独计算
+                torch_reduction = torch_bonus / 100
+                beast_after_torch = int(beast_after_camp * (1 - torch_reduction))
+                torch_reduced = beast_after_camp - beast_after_torch
+                if torch_bonus > 0:
+                    round_log.append(f"  火把减伤: -{torch_reduced} (惊吓{torch_bonus}，减免{int(torch_reduction*100)}%)")
+                
+                # 伙伴减伤 - 单独计算
+                beast_after_companion = int(beast_after_torch * (1 - companion_defense))
+                companion_reduced = beast_after_torch - beast_after_companion
                 if companion_defense > 0:
                     round_log.append(f"  伙伴减伤: -{companion_reduced} (减免{int(companion_defense*100)}%)")
                 
-                # 最终伤害
-                beast_damage_final = max(1, beast_damage_after_companion)
+                # 计算各阶段总减伤
+                total_reduced = camp_reduced + torch_reduced + companion_reduced
                 
-                # 额外抵挡 - 直接加回到生命值，单独记录
+                # 最终伤害（减伤后）
+                beast_damage_final = max(1, beast_after_companion)
+                round_log.append(f"  减伤后: {beast_damage_final} (共减免{total_reduced})")
+                
+                # 额外抵挡 - 防御设施触发的直接抵挡
                 blocked = 0
                 if camp_defense > 0 and random.random() < 0.3:
-                    blocked = random.randint(5, 15)
-                    total_blocked += blocked
-                    round_log.append(f"  额外抵挡: +{blocked} (防御设施触发)")
+                    camp_block = random.randint(5, 15)
+                    blocked += camp_block
+                    total_blocked += camp_block
+                    round_log.append(f"  防御抵挡: +{camp_block} (设施触发)")
                 
-                torch_half = False
+                # 火把惊吓 - 额外伤害减半
                 if torches > 0 and random.random() < 0.2:
-                    torch_blocked = beast_damage_final // 2
-                    blocked += torch_blocked
-                    total_blocked += torch_blocked
-                    torch_half = True
-                    round_log.append(f"  火把惊吓: +{torch_blocked} (伤害减半)")
+                    torch_block = beast_damage_final // 2
+                    blocked += torch_block
+                    total_blocked += torch_block
+                    round_log.append(f"  火把惊吓: +{torch_block} (伤害减半)")
                 
-                # 实际扣血 = 最终伤害 - 额外抵挡
+                # 实际扣血 = 减伤后伤害 - 额外抵挡
                 actual_damage_this_round = max(0, beast_damage_final - blocked)
+                
+                # 验证公式：原始伤害 - 减伤总额 - 额外抵挡 = 实际扣血
+                verify_damage = beast_damage_raw - total_reduced - blocked
+                verify_damage = max(0, verify_damage)
                 
                 # 扣血
                 if actual_damage_this_round > 0:
@@ -687,6 +705,10 @@ save - 存档系统
                     round_log.append(f"  实际扣血: -{actual_damage_this_round} 生命")
                 else:
                     round_log.append(f"  实际扣血: 0 (完全抵挡)")
+                
+                # 验证数据一致性
+                assert abs(actual_damage_this_round - verify_damage) <= 1, \
+                    f"战斗数据不一致: 实际{actual_damage_this_round} != 验证{verify_damage} (原始{beast_damage_raw}-减伤{total_reduced}-抵挡{blocked})"
                 
                 round_log.append(f"  野兽剩余: {max(0, beast_current_hp)}/{beast_hp}")
                 round_log.append(f"  玩家生命: {self.game.health}/{self.game.max_health}")
@@ -703,7 +725,7 @@ save - 存档系统
                     break
             
             actual_total_damage = old_health - self.game.health
-            text += f"=== 战斗结算 ===\n"
+            text += "=== 战斗结算 ===\n"
             text += f"  战斗回合: {min(round_num, 5)}回合\n"
             text += f"  造成伤害: {total_damage_dealt}\n"
             text += f"  受到伤害: {total_damage_taken}\n"
@@ -712,6 +734,7 @@ save - 存档系统
             text += f"  战前生命: {old_health}\n"
             text += f"  战后生命: {self.game.health}\n"
             text += f"  实际掉血: {actual_total_damage}\n"
+            text += f"  验证公式: {old_health} - {actual_total_damage} = {self.game.health} ✓\n"
             
             self.game.log_battle("=== 战斗结算 ===")
             self.game.log_battle(f"  战斗回合: {min(round_num, 5)}回合")
@@ -722,10 +745,13 @@ save - 存档系统
             self.game.log_battle(f"  战前生命: {old_health}")
             self.game.log_battle(f"  战后生命: {self.game.health}")
             self.game.log_battle(f"  实际掉血: {actual_total_damage}")
+            self.game.log_battle(f"  验证公式: {old_health} - {actual_total_damage} = {self.game.health} ✓")
             
             # 验证三边对齐
             assert actual_total_damage == total_damage_taken, \
                 f"战斗数据不一致：实际掉血{actual_total_damage} != 总受到伤害{total_damage_taken}"
+            assert old_health - actual_total_damage == self.game.health, \
+                f"战斗数据不一致：战前{old_health} - 掉血{actual_total_damage} != 战后{self.game.health}"
             
             if self.game.health <= 0:
                 death_msg = f"你在战斗中倒下了..."
@@ -733,14 +759,11 @@ save - 存档系统
                 self.game.log_battle(death_msg)
                 for log in self.game.battle_log:
                     self.game.log_event(f"[战斗] {log}")
-            text += f"  最终生命: {self.game.health}/{self.game.max_health}\n"
-            
-            if self.game.health <= 0:
+                
                 self.game.death_cause = "killed_by_beast"
                 self.game.ending = "killed_by_beast"
                 self.game.game_over = True
                 self.game.calculate_score()
-                text += f"\n💀 你在与{beast_name}的战斗中倒下了...\n"
                 ending = ENDINGS["killed_by_beast"]
                 text += f"{ending['name']}: {ending['description']}\n"
                 text += f"最终得分: {self.game.score}"
@@ -751,22 +774,30 @@ save - 存档系统
             text += "🌙 今夜平安无事，只有虫鸣声和海浪声...\n"
             self.game.log_battle("  结果: 今夜平安无事")
             
-            # 夜间恢复
+            # 夜间恢复 - 使用新的设施效果系统
+            night_heal = self.game.get_facility_effect("night_heal")
+            
+            for comp in self.game.companions:
+                night_heal += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 5)
+            
             shelter_level = self.game.get_camp_upgrade_level("shelter")
             fire_level = self.game.get_camp_upgrade_level("fire")
             
-            heal_amount = 3 + shelter_level * 2
-            if fire_level > 0:
-                heal_amount += fire_level * 2 + 1
-            
-            for comp in self.game.companions:
-                heal_amount += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 5)
-            
             old_hp = self.game.health
-            self.game.health = min(self.game.max_health, self.game.health + heal_amount)
+            self.game.health = min(self.game.max_health, self.game.health + night_heal)
             actual_heal = self.game.health - old_hp
+            
+            heal_details = []
+            if shelter_level > 0:
+                shelter_heal = CAMP_UPGRADES["shelter"]["levels"][shelter_level-1]["effects"].get("night_heal", 0)
+                heal_details.append(f"营地+{shelter_heal}")
+            if fire_level > 0:
+                fire_heal = CAMP_UPGRADES["fire"]["levels"][fire_level-1]["effects"].get("night_heal", 0)
+                heal_details.append(f"火源+{fire_heal}")
+            
             text += f"💤 你在营地安心休息，恢复了 {actual_heal} 点生命值。\n"
-            text += f"   (营地等级+{shelter_level*2}, 火源等级+{fire_level*2+1 if fire_level>0 else 0})\n"
+            if heal_details:
+                text += f"   ({', '.join(heal_details)})\n"
             
             self.game.log_battle(f"  夜间恢复: +{actual_heal} 生命")
             self.game.log_event(f"夜间平安，恢复{actual_heal}点生命")
@@ -1009,10 +1040,70 @@ save - 存档系统
         
         elif subcmd == "build":
             if len(args) < 2:
-                return "用法：camp build <设施>\n设施：shelter, fire, water_filter, storage, defense, torch, boat_part"
+                facility_list = ", ".join(CAMP_UPGRADES.keys())
+                return f"用法：camp build <设施>\n设施：{facility_list}, torch, boat_part\n说明：build 和 upgrade 功能相同，都是建造或升级营地设施"
             
-            facility = args[1]
-            return self._build_facility(facility)
+            facility_id = args[1]
+            
+            if facility_id == "torch":
+                if not self.game.has_item("wood", 1) or not self.game.has_item("fiber", 2):
+                    return "材料不足：需要 木材x1, 纤维x2"
+                self.game.remove_item("wood", 1)
+                self.game.remove_item("fiber", 2)
+                self.game.add_item("torch", 2)
+                self.game.camp["torches"] += 2
+                self.game.log_action("制作火把 x2")
+                advance_msg = self.game.advance_turn(1)
+                text = "制作了 2 个火把！"
+                if advance_msg:
+                    text += f"\n{advance_msg}"
+                return text
+            
+            if facility_id == "boat_part":
+                if not self.game.has_item("wood", 20) or not self.game.has_item("rope", 5) or not self.game.has_item("iron_ingot", 3):
+                    return "材料不足：需要 木材x20, 绳索x5, 铁锭x3"
+                self.game.remove_item("wood", 20)
+                self.game.remove_item("rope", 5)
+                self.game.remove_item("iron_ingot", 3)
+                self.game.boat_parts += 1
+                
+                if self.game.boat_parts >= self.game.total_boat_parts:
+                    self.game.victory = True
+                    self.game.ending = "build_boat"
+                    self.game.game_over = True
+                    self.game.calculate_score()
+                    text = "🏆 你造好了一艘小船！你成功离开了这座荒岛！\n"
+                    ending = ENDINGS["build_boat"]
+                    text += f"{ending['description']}\n"
+                    text += f"\n最终得分：{self.game.score}"
+                    return text
+                
+                self.game.log_action("建造船只零件")
+                advance_msg = self.game.advance_turn(2)
+                text = f"建造了 1 个船只零件！({self.game.boat_parts}/{self.game.total_boat_parts})"
+                if advance_msg:
+                    text += f"\n{advance_msg}"
+                return text
+            
+            if facility_id not in CAMP_UPGRADES:
+                return f"未知设施：{facility_id}"
+            
+            success, result = self.game.upgrade_facility(facility_id)
+            if not success:
+                return f"无法建造：{result}"
+            
+            facility = CAMP_UPGRADES[facility_id]
+            if result["level"] == 1:
+                text = f"🎉 建造了{result['name']}！\n"
+            else:
+                text = f"🎉 {facility['name']}升级到{result['name']}！(等级{result['level']})\n"
+            text += f"   效果：{result['benefit']}\n"
+            
+            self.game.log_action(f"建造/升级{facility['name']}到{result['name']}")
+            advance_msg = self.game.advance_turn(2)
+            if advance_msg:
+                text += f"\n{advance_msg}"
+            return text
         
         elif subcmd == "cook":
             if not self.game.camp["has_fire"]:
@@ -1022,17 +1113,33 @@ save - 存档系统
             cooked = False
             text = ""
             
+            cooking_bonus = self.game.get_facility_effect("cooking_bonus")
+            bonus_text = f" (烹饪效率+{int(cooking_bonus*100)}%)" if cooking_bonus > 0 else ""
+            
+            total_raw = 0
+            total_food = 0
+            
             for raw_id, raw_name in raw_items:
                 while self.game.has_item(raw_id):
                     self.game.remove_item(raw_id, 1)
-                    self.game.add_item("food", 1)
-                    text += f"烹饪 {raw_name} -> 食物\n"
+                    base_output = 1
+                    bonus_output = int(base_output * cooking_bonus)
+                    total_output = base_output + bonus_output
+                    self.game.add_item("food", total_output)
+                    if bonus_output > 0:
+                        text += f"烹饪 {raw_name} -> 食物 x{total_output} (+{bonus_output}效率加成)\n"
+                    else:
+                        text += f"烹饪 {raw_name} -> 食物 x{total_output}\n"
+                    total_raw += 1
+                    total_food += total_output
                     cooked = True
             
             if not cooked:
                 return "没有可烹饪的生肉或生鱼。"
             
-            self.game.log_action("烹饪食物")
+            text += f"\n总计：{total_raw}份原料 -> {total_food}份食物{bonus_text}"
+            
+            self.game.log_action(f"烹饪食物: {total_raw}份原料 -> {total_food}份食物")
             advance_msg = self.game.advance_turn(1)
             if advance_msg:
                 text += f"\n{advance_msg}"
@@ -1044,19 +1151,22 @@ save - 存档系统
             if not self.game.has_item("dirty_water"):
                 return "没有脏水可以净化。"
             
+            purify_multiplier = max(1, self.game.get_facility_effect("purify_multiplier"))
+            
             count = 0
+            total_water = 0
             while self.game.has_item("dirty_water"):
                 self.game.remove_item("dirty_water", 1)
-                if self.game.camp["has_water_filter"]:
-                    self.game.add_item("water", 2)
-                else:
-                    self.game.add_item("water", 1)
+                output = purify_multiplier
+                self.game.add_item("water", output)
                 count += 1
+                total_water += output
             
-            self.game.log_action(f"净化 {count} 单位脏水")
+            multiplier_text = f" (净水器x{purify_multiplier})" if purify_multiplier > 1 else ""
+            text = f"净化了 {count} 单位脏水，得到 {total_water} 单位净水。{multiplier_text}"
+            
+            self.game.log_action(f"净化 {count} 单位脏水 -> {total_water} 单位净水")
             advance_msg = self.game.advance_turn(1)
-            output = count * 2 if self.game.camp["has_water_filter"] else count
-            text = f"净化了 {count} 单位脏水，得到 {output} 单位净水。"
             if advance_msg:
                 text += f"\n{advance_msg}"
             return text
@@ -1119,89 +1229,6 @@ save - 存档系统
             return self._night_defense_combat()
         
         return "未知子命令。用法：camp show | build | cook | purify | heal | defend"
-
-    def _build_facility(self, facility):
-        building_costs = {
-            "shelter": {"wood": 10, "stone": 5, "rope": 2},
-            "fire": {"wood": 5, "flint": 2},
-            "water_filter": {"wood": 5, "stone": 10, "fiber": 10},
-            "storage": {"wood": 15, "rope": 3},
-            "defense": {"wood": 10, "stone": 15, "rope": 2},
-            "torch": {"wood": 1, "fiber": 2},
-            "boat_part": {"wood": 20, "rope": 5, "iron_ingot": 3},
-        }
-        
-        facility_names = {
-            "shelter": "营地",
-            "fire": "火源",
-            "water_filter": "净水器",
-            "storage": "仓库",
-            "defense": "防御设施",
-            "torch": "火把",
-            "boat_part": "船只零件",
-        }
-        
-        if facility not in building_costs:
-            return f"未知设施：{facility}"
-        
-        if facility == "shelter" and self.game.camp["built"]:
-            return "营地已经建造了。"
-        if facility == "fire" and self.game.camp["has_fire"]:
-            return "火已经生好了。"
-        if facility == "water_filter" and self.game.camp["has_water_filter"]:
-            return "净水器已经建造了。"
-        if facility == "storage" and self.game.camp["has_storage"]:
-            return "仓库已经建造了。"
-        if facility == "defense" and self.game.camp["defense_level"] >= 5:
-            return "防御等级已达最高。"
-        
-        cost = building_costs[facility]
-        for mat_id, mat_qty in cost.items():
-            if not self.game.has_item(mat_id, mat_qty):
-                return f"材料不足：需要 {ITEMS[mat_id]['name']} x{mat_qty}"
-        
-        for mat_id, mat_qty in cost.items():
-            self.game.remove_item(mat_id, mat_qty)
-        
-        if facility == "shelter":
-            self.game.camp["built"] = True
-        elif facility == "fire":
-            self.game.camp["has_fire"] = True
-        elif facility == "water_filter":
-            self.game.camp["has_water_filter"] = True
-        elif facility == "storage":
-            self.game.camp["has_storage"] = True
-        elif facility == "defense":
-            self.game.camp["defense_level"] += 1
-        elif facility == "torch":
-            self.game.add_item("torch", 2)
-            self.game.camp["torches"] += 2
-        elif facility == "boat_part":
-            self.game.boat_parts += 1
-            if self.game.boat_parts >= self.game.total_boat_parts:
-                self.game.victory = True
-                self.game.ending = "build_boat"
-                self.game.game_over = True
-                self.game.calculate_score()
-                text = "🏆 你造好了一艘小船！你成功离开了这座荒岛！\n"
-                ending = ENDINGS["build_boat"]
-                text += f"{ending['description']}\n"
-                text += f"\n最终得分：{self.game.score}"
-                return text
-        
-        turns = 2 if facility in ["shelter", "boat_part"] else 1
-        advance_msg = self.game.advance_turn(turns)
-        
-        result = f"建造了 {facility_names[facility]}！"
-        if facility == "defense":
-            result = f"防御等级提升到 {self.game.camp['defense_level']}！"
-        elif facility == "boat_part":
-            result = f"船只零件进度：{self.game.boat_parts}/{self.game.total_boat_parts}"
-        
-        self.game.log_action(f"建造 {facility_names[facility]}")
-        if advance_msg:
-            result += f"\n{advance_msg}"
-        return result
 
     def cmd_event(self, args):
         if self.game.game_over:
@@ -1402,6 +1429,57 @@ save - 存档系统
         
         if g.weather_forecast in ["storm", "cold_snap"]:
             quests.append({"priority": 2, "title": "⛈️ 准备应对恶劣天气", "desc": f"天气预报：{EVENTS[g.weather_forecast]['message']}，多准备食物和水"})
+        
+        map_remaining = g.total_map_fragments - g.map_fragments
+        boat_remaining = g.total_boat_parts - g.boat_parts
+        
+        treasure_route_score = g.map_fragments * 2 + g.ruin_exploration_progress
+        escape_route_score = g.boat_parts * 3 + g.get_camp_upgrade_level("shelter")
+        
+        if treasure_route_score > escape_route_score and map_remaining > 0:
+            priority = 2 if map_remaining <= 2 else 3
+            if g.get_available_clues():
+                quests.append({"priority": priority, "title": "🏛️ 探索遗迹找线索", 
+                    "desc": f"走宝藏路线！还差 {map_remaining} 块地图碎片，先去遗迹发现更多线索提高获取概率"})
+            else:
+                quests.append({"priority": priority, "title": "🗺️ 收集地图碎片", 
+                    "desc": f"走宝藏路线！还差 {map_remaining} 块碎片，去遗迹探索或商人处购买"})
+        elif escape_route_score >= treasure_route_score and boat_remaining > 0 and g.day >= 10:
+            priority = 2 if boat_remaining <= 1 else 3
+            quests.append({"priority": priority, "title": "⛵ 建造船只零件", 
+                "desc": f"走逃离路线！还差 {boat_remaining} 个船只零件，需要大量木材、绳索和铁锭"})
+        
+        defense_level = g.get_camp_upgrade_level("defense")
+        if defense_level < 2 and g.day >= 7 and g.camp["torches"] < 5:
+            quests.append({"priority": 3, "title": "🏰 补强营地防御", 
+                "desc": f"随着时间推移，夜间越来越危险，建议升级防御到等级2并多备火把"})
+        
+        fire_level = g.get_camp_upgrade_level("fire")
+        if fire_level >= 1:
+            has_smelting_materials = g.has_item("iron_ore", 2) or g.has_item("stone", 5)
+            need_iron = g.get_camp_upgrade_level("defense") < 3 or boat_remaining > 0
+            if has_smelting_materials and need_iron and not g.has_item("iron_ingot", 3):
+                if not g.has_item("charcoal", 2):
+                    quests.append({"priority": 4, "title": "🔥 烧制木炭", 
+                        "desc": "冶炼铁锭需要木炭，用3个木材可以烧制3份木炭，先 craft make charcoal"})
+                if g.has_item("charcoal", 1) and g.has_item("iron_ore", 2):
+                    quests.append({"priority": 3, "title": "⚒️ 冶炼铁锭", 
+                        "desc": "有铁矿和木炭了，craft make iron_ingot 冶炼铁锭，用于升级防御和造船"})
+            
+            if fire_level < 2 and g.has_item("stone", 10):
+                quests.append({"priority": 4, "title": "🔥 升级火源到石砌炉灶", 
+                    "desc": "升级后可以冶炼金属，烹饪效率+50%，先 camp upgrade fire"})
+        
+        water_filter_level = g.get_camp_upgrade_level("water_filter")
+        if water_filter_level == 1 and g.has_item("charcoal", 3) and g.has_item("stone", 10):
+            quests.append({"priority": 4, "title": "💧 升级净水器到多级过滤", 
+                "desc": "升级后净水产出3倍，雨天自动收集雨水，先 camp upgrade water_filter"})
+        
+        if g.has_item("stone", 6) and g.has_item("wood", 2) and fire_level >= 1:
+            need_brick = g.get_camp_upgrade_level("shelter") < 3 or g.get_camp_upgrade_level("fire") < 3 or g.get_camp_upgrade_level("defense") < 3
+            if need_brick and not g.has_item("brick", 5):
+                quests.append({"priority": 4, "title": "🧱 烧制砖块", 
+                    "desc": "高级建筑需要砖块，用3石头+1木材可以烧制2块砖，craft make brick"})
         
         quests.sort(key=lambda x: x["priority"])
         

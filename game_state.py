@@ -122,6 +122,48 @@ class GameState:
             self.calculate_score()
             return True
         return False
+    
+    def _migrate_old_camp_data(self):
+        """迁移旧存档的营地数据到新的升级系统"""
+        if "shelter_level" not in self.camp:
+            self.camp["shelter_level"] = 1 if self.camp.get("built", False) else 0
+        if "fire_level" not in self.camp:
+            self.camp["fire_level"] = 1 if self.camp.get("has_fire", False) else 0
+        if "water_filter_level" not in self.camp:
+            self.camp["water_filter_level"] = 1 if self.camp.get("has_water_filter", False) else 0
+        if "storage_level" not in self.camp:
+            self.camp["storage_level"] = 1 if self.camp.get("has_storage", False) else 0
+        if "defense_upgrade_level" not in self.camp:
+            self.camp["defense_upgrade_level"] = self.camp.get("defense_level", 0)
+        
+        self.camp["built"] = self.camp["shelter_level"] > 0
+        self.camp["has_fire"] = self.camp["fire_level"] > 0
+        self.camp["has_water_filter"] = self.camp["water_filter_level"] > 0
+        self.camp["has_storage"] = self.camp["storage_level"] > 0
+        self.camp["defense_level"] = self.camp["defense_upgrade_level"]
+    
+    def get_facility_effect(self, effect_name):
+        """获取所有设施的指定效果总和"""
+        total = 0
+        for facility_id in CAMP_UPGRADES:
+            level = self.get_camp_upgrade_level(facility_id)
+            if level > 0:
+                level_data = CAMP_UPGRADES[facility_id]["levels"][level - 1]
+                if "effects" in level_data and effect_name in level_data["effects"]:
+                    value = level_data["effects"][effect_name]
+                    if isinstance(value, (int, float)):
+                        total += value
+        return total
+    
+    def has_facility_flag(self, flag_name):
+        """检查是否有设施开启了指定的功能标志"""
+        for facility_id in CAMP_UPGRADES:
+            level = self.get_camp_upgrade_level(facility_id)
+            if level > 0:
+                level_data = CAMP_UPGRADES[facility_id]["levels"][level - 1]
+                if "effects" in level_data and level_data["effects"].get(flag_name, False):
+                    return True
+        return False
 
     def remove_item(self, item_id, quantity=1):
         if ITEMS[item_id]["type"] in ["tool", "weapon", "light"]:
@@ -217,6 +259,11 @@ class GameState:
                 if not self.camp["has_fire"] and self.current_location == "camp":
                     self.health -= 2
             
+            if self.weather in ["rain", "storm"] and self.has_facility_flag("rain_collection"):
+                water_collected = random.randint(1, 3)
+                self.add_item("water", water_collected)
+                messages.append(f"雨水收集器收集了 {water_collected} 单位净水！")
+            
             self.hunger = max(0, self.hunger)
             self.thirst = max(0, self.thirst)
             self.health = max(0, min(self.max_health, self.health))
@@ -306,8 +353,8 @@ class GameState:
         self.weather_forecast = None
         
         config = DIFFICULTY_CONFIG[self.difficulty]
-        if random.random() < config["event_chance"] * 0.3:
-            weather_events = ["storm", "heatwave", "cold_snap"]
+        if random.random() < config["event_chance"] * 0.5:
+            weather_events = ["rain", "rain", "storm", "heatwave", "cold_snap"]
             weather = random.choice(weather_events)
             self.weather_forecast = weather
             event_data = EVENTS[weather]
@@ -515,6 +562,7 @@ class GameState:
         self.battle_log = data.get("battle_log", [])
         
         self._sync_map_fragments()
+        self._migrate_old_camp_data()
         
         return True, f"已加载存档：{slot_name}（保存于 {data.get('saved_at', '未知时间')}）"
 

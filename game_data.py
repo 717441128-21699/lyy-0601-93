@@ -78,6 +78,9 @@ ITEMS = {
     "map_fragment": {"name": "地图碎片", "type": "special", "description": "遗迹中发现的地图碎片，收集完整可发现宝藏"},
     "ancient_coin": {"name": "古代钱币", "type": "special", "description": "神秘的古代钱币，可以交易"},
     "gold": {"name": "黄金", "type": "special", "description": "闪闪发光的黄金"},
+    "brick": {"name": "砖块", "type": "material", "description": "烧制的砖块，用于高级建筑"},
+    "charcoal": {"name": "木炭", "type": "material", "description": "烧制的木炭，高效燃料，用于冶炼和过滤"},
+    "rain_collector": {"name": "雨水收集器", "type": "facility", "description": "自动收集雨水"},
 }
 
 RECIPES = {
@@ -92,9 +95,11 @@ RECIPES = {
     "rope": {"materials": {"fiber": 4}, "category": "material", "quantity": 1},
     "bandage": {"materials": {"fiber": 3}, "category": "medical", "quantity": 2},
     "antidote": {"materials": {"herb": 3, "water": 1}, "category": "medical"},
-    "iron_ingot": {"materials": {"iron_ore": 2, "coal": 1}, "category": "material", "require_fire": True},
+    "iron_ingot": {"materials": {"iron_ore": 2, "charcoal": 1}, "category": "material", "require_fire": True},
     "iron_axe": {"materials": {"iron_ingot": 2, "wood": 2}, "category": "tool"},
     "iron_sword": {"materials": {"iron_ingot": 3, "wood": 1}, "category": "weapon"},
+    "brick": {"materials": {"stone": 3, "wood": 1}, "category": "material", "require_fire": True, "quantity": 2},
+    "charcoal": {"materials": {"wood": 3}, "category": "material", "require_fire": True, "quantity": 3},
 }
 
 COOKING_RECIPES = {
@@ -195,6 +200,13 @@ EVENTS = {
             {"iron_ore": 3, "coal": 2},
             {"ancient_coin": 5, "map_fragment": 1},
         ]
+    },
+    "rain": {
+        "name": "降雨",
+        "type": "weather",
+        "weight": 12,
+        "message": "天空开始下雨了。",
+        "effect": {},
     },
     "storm": {
         "name": "暴风雨",
@@ -352,18 +364,18 @@ CAMP_UPGRADES = {
     "shelter": {
         "name": "营地",
         "levels": [
-            {"level": 1, "name": "简易营地", "cost": {"wood": 10, "stone": 5, "rope": 2}, "benefit": "提供基本庇护，夜间恢复+5生命", "unlocks": ["fire", "storage"]},
-            {"level": 2, "name": "加固营地", "cost": {"wood": 15, "stone": 10, "rope": 3}, "benefit": "更坚固的庇护，夜间恢复+8生命，防御+10", "unlocks": ["defense"]},
-            {"level": 3, "name": "坚固堡垒", "cost": {"wood": 20, "stone": 20, "rope": 5, "iron_ingot": 2}, "benefit": "非常坚固，夜间恢复+12生命，防御+20，下雨也能休息", "unlocks": []},
+            {"level": 1, "name": "简易营地", "cost": {"wood": 10, "stone": 5, "rope": 2}, "benefit": "提供基本庇护，夜间恢复+5生命", "unlocks": ["fire", "storage"], "effects": {"night_heal": 5, "defense": 0}},
+            {"level": 2, "name": "加固营地", "cost": {"wood": 15, "stone": 10, "rope": 3}, "benefit": "更坚固的庇护，夜间恢复+8生命，防御+10", "unlocks": ["defense"], "effects": {"night_heal": 8, "defense": 10}},
+            {"level": 3, "name": "坚固堡垒", "cost": {"wood": 20, "stone": 20, "rope": 5, "brick": 5, "iron_ingot": 2}, "benefit": "非常坚固，夜间恢复+12生命，防御+20，下雨也能休息", "unlocks": [], "effects": {"night_heal": 12, "defense": 20, "rain_proof": True}},
         ],
         "max_level": 3,
     },
     "fire": {
         "name": "火源",
         "levels": [
-            {"level": 1, "name": "篝火", "cost": {"wood": 5, "flint": 2}, "benefit": "可以烹饪食物和净化水，夜间恢复+3生命", "unlocks": ["water_filter", "cooking"]},
-            {"level": 2, "name": "石砌炉灶", "cost": {"stone": 10, "wood": 5}, "benefit": "烹饪效率+50%，消耗木材减少，夜间恢复+5生命", "unlocks": ["smelting"]},
-            {"level": 3, "name": "砖石壁炉", "cost": {"stone": 20, "brick": 5, "iron_ingot": 1}, "benefit": "烹饪效率+100%，提供更好的照明，夜间恢复+8生命", "unlocks": []},
+            {"level": 1, "name": "篝火", "cost": {"wood": 5, "flint": 2}, "benefit": "可以烹饪食物和净化水，夜间恢复+3生命", "unlocks": ["water_filter", "cooking"], "effects": {"night_heal": 3, "cooking_bonus": 0}},
+            {"level": 2, "name": "石砌炉灶", "cost": {"stone": 10, "wood": 5}, "benefit": "烹饪效率+50%，可冶炼金属，夜间恢复+5生命", "unlocks": ["smelting"], "effects": {"night_heal": 5, "cooking_bonus": 0.5}},
+            {"level": 3, "name": "砖石壁炉", "cost": {"stone": 20, "brick": 8, "charcoal": 3, "iron_ingot": 1}, "benefit": "烹饪效率+100%，冶炼效率+50%，夜间恢复+8生命，照明范围更大", "unlocks": [], "effects": {"night_heal": 8, "cooking_bonus": 1.0, "smelting_bonus": 0.5}},
         ],
         "max_level": 3,
         "requires": "shelter",
@@ -371,8 +383,8 @@ CAMP_UPGRADES = {
     "storage": {
         "name": "仓库",
         "levels": [
-            {"level": 1, "name": "简易货架", "cost": {"wood": 15, "rope": 3}, "benefit": "物品整理更有序，采集效率+10%", "unlocks": []},
-            {"level": 2, "name": "木板仓库", "cost": {"wood": 25, "rope": 5, "iron_ingot": 1}, "benefit": "更大的存储空间，采集效率+20%，物品不会因潮湿损坏", "unlocks": []},
+            {"level": 1, "name": "简易货架", "cost": {"wood": 15, "rope": 3}, "benefit": "物品整理更有序，采集效率+10%", "unlocks": [], "effects": {"gather_bonus": 0.1}},
+            {"level": 2, "name": "木板仓库", "cost": {"wood": 25, "rope": 5, "iron_ingot": 1}, "benefit": "更大的存储空间，采集效率+20%，物品不会因潮湿损坏", "unlocks": [], "effects": {"gather_bonus": 0.2, "moisture_proof": True}},
         ],
         "max_level": 2,
         "requires": "shelter",
@@ -380,8 +392,8 @@ CAMP_UPGRADES = {
     "water_filter": {
         "name": "净水器",
         "levels": [
-            {"level": 1, "name": "简易过滤器", "cost": {"wood": 5, "stone": 10, "fiber": 10}, "benefit": "净化脏水获得2倍净水", "unlocks": []},
-            {"level": 2, "name": "多级过滤系统", "cost": {"stone": 15, "fiber": 20, "charcoal": 5}, "benefit": "净化脏水获得3倍净水，可收集雨水", "unlocks": []},
+            {"level": 1, "name": "简易过滤器", "cost": {"wood": 5, "stone": 10, "fiber": 10}, "benefit": "净化脏水获得2倍净水", "unlocks": [], "effects": {"purify_multiplier": 2}},
+            {"level": 2, "name": "多级过滤系统", "cost": {"stone": 15, "fiber": 20, "charcoal": 5, "brick": 3}, "benefit": "净化脏水获得3倍净水，雨天自动收集雨水", "unlocks": [], "effects": {"purify_multiplier": 3, "rain_collection": True}},
         ],
         "max_level": 2,
         "requires": "fire",
@@ -389,9 +401,9 @@ CAMP_UPGRADES = {
     "defense": {
         "name": "防御设施",
         "levels": [
-            {"level": 1, "name": "尖刺围栏", "cost": {"wood": 10, "stone": 15, "rope": 2}, "benefit": "夜间防御+10，野兽袭击概率-10%", "unlocks": []},
-            {"level": 2, "name": "围墙", "cost": {"stone": 25, "wood": 15, "rope": 3}, "benefit": "夜间防御+25，野兽袭击概率-25%", "unlocks": []},
-            {"level": 3, "name": "瞭望塔", "cost": {"wood": 30, "stone": 30, "rope": 5, "iron_ingot": 2}, "benefit": "夜间防御+50，野兽袭击概率-50%，提前预警", "unlocks": []},
+            {"level": 1, "name": "尖刺围栏", "cost": {"wood": 10, "stone": 15, "rope": 2}, "benefit": "夜间防御+10，野兽袭击概率-10%", "unlocks": [], "effects": {"defense": 10, "attack_reduction": 0.1}},
+            {"level": 2, "name": "围墙", "cost": {"stone": 25, "wood": 15, "rope": 3, "brick": 5}, "benefit": "夜间防御+25，野兽袭击概率-25%", "unlocks": [], "effects": {"defense": 25, "attack_reduction": 0.25}},
+            {"level": 3, "name": "瞭望塔", "cost": {"wood": 30, "stone": 30, "rope": 5, "brick": 10, "iron_ingot": 3}, "benefit": "夜间防御+50，野兽袭击概率-50%，提前1回合预警", "unlocks": [], "effects": {"defense": 50, "attack_reduction": 0.5, "early_warning": True}},
         ],
         "max_level": 3,
         "requires": "shelter",
