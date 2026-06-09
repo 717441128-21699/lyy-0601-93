@@ -7,6 +7,24 @@ from game_data import (
     EVENTS, COMPANIONS, TRADER_ITEMS, ENDINGS, WATER_PURIFICATION
 )
 
+def parse_int_param(value, min_val=1, max_val=None, param_name="数量"):
+    """解析整数参数，返回 (成功, 结果/错误信息)"""
+    if value is None or value == "":
+        return False, f"参数错误：{param_name}不能为空。"
+    
+    try:
+        num = int(value)
+    except (ValueError, TypeError):
+        return False, f"参数错误：{param_name}必须是正整数，不能是'{value}'。"
+    
+    if num < min_val:
+        return False, f"参数错误：{param_name}不能小于{min_val}。"
+    
+    if max_val is not None and num > max_val:
+        return False, f"参数错误：{param_name}不能大于{max_val}。"
+    
+    return True, num
+
 class CommandHandler:
     def __init__(self, game_state):
         self.game = game_state
@@ -156,53 +174,140 @@ save - 存档系统
             if not location["resources"]:
                 return "这里没有可采集的资源。"
             
-            quantity = int(args[1]) if len(args) > 1 else 1
-            if quantity < 1 or quantity > 3:
-                return "采集数量必须在1-3之间。"
-            
             if self.game.time_of_day == "night":
                 return "夜间太危险，无法采集资源。"
             
-            gathered = {}
-            messages = []
+            success, result = parse_int_param(
+                args[1] if len(args) > 1 else "1",
+                min_val=1, max_val=3, param_name="采集数量"
+            )
+            if not success:
+                return result + "\n用法：map gather [数量]，数量范围1-3"
+            quantity = result
             
-            for _ in range(quantity):
+            summary = {
+                "gathered": {},
+                "tools_used": [],
+                "weather_effects": [],
+                "events": [],
+                "turn_summary": []
+            }
+            
+            for turn in range(1, quantity + 1):
+                turn_gathered = {}
+                turn_log = [f"--- 第{turn}次采集 ---"]
+                
+                old_hunger = self.game.hunger
+                old_thirst = self.game.thirst
+                old_health = self.game.health
+                
                 for resource, chance in location["resources"].items():
                     resource_type = resource.replace("_", "")
                     bonus = self.game.get_gather_bonus(resource_type)
                     if random.random() < chance * bonus:
                         amount = random.randint(1, 2)
-                        if resource in gathered:
-                            gathered[resource] += amount
-                        else:
-                            gathered[resource] = amount
+                        turn_gathered[resource] = amount
                         
                         if resource == "wood" and self.game.has_item("axe"):
-                            self.game.use_tool("axe")
+                            ok, msg = self.game.use_tool("axe")
+                            if msg:
+                                summary["tools_used"].append(msg)
                         elif resource == "stone" and self.game.has_item("pickaxe"):
-                            self.game.use_tool("pickaxe")
+                            ok, msg = self.game.use_tool("pickaxe")
+                            if msg:
+                                summary["tools_used"].append(msg)
                         elif resource == "raw_fish" and self.game.has_item("fishing_rod"):
-                            self.game.use_tool("fishing_rod")
+                            ok, msg = self.game.use_tool("fishing_rod")
+                            if msg:
+                                summary["tools_used"].append(msg)
                         elif resource in ["fiber", "vine"] and self.game.has_item("knife"):
-                            self.game.use_tool("knife")
-            
-            if gathered:
-                text = "采集到：\n"
-                for item, amount in gathered.items():
+                            ok, msg = self.game.use_tool("knife")
+                            if msg:
+                                summary["tools_used"].append(msg)
+                
+                for item, amount in turn_gathered.items():
                     self.game.add_item(item, amount)
+                    if item in summary["gathered"]:
+                        summary["gathered"][item] += amount
+                    else:
+                        summary["gathered"][item] = amount
+                    turn_log.append(f"  获得 {ITEMS[item]['name']} x{amount}")
+                
+                if not turn_gathered:
+                    turn_log.append("  什么都没找到...")
+                
+                advance_msg = self.game.advance_turn(1)
+                
+                hunger_change = self.game.hunger - old_hunger
+                thirst_change = self.game.thirst - old_thirst
+                health_change = self.game.health - old_health
+                
+                if hunger_change != 0 or thirst_change != 0 or health_change != 0:
+                    changes = []
+                    if hunger_change != 0:
+                        changes.append(f"饱食{hunger_change:+d}")
+                    if thirst_change != 0:
+                        changes.append(f"口渴{thirst_change:+d}")
+                    if health_change != 0:
+                        changes.append(f"生命{health_change:+d}")
+                    turn_log.append(f"  状态变化: {', '.join(changes)}")
+                
+                if self.game.weather != "clear":
+                    weather_names = {"storm": "暴风雨", "heatwave": "热浪", "cold_snap": "寒流"}
+                    summary["weather_effects"].append(f"第{turn}次: {weather_names.get(self.game.weather, '恶劣天气')}影响")
+                
+                if advance_msg:
+                    turn_log.append(f"  {advance_msg}")
+                
+                if random.random() < location["danger"] * 0.3:
+                    event_msg = self._trigger_random_event()
+                    if event_msg:
+                        summary["events"].append(f"第{turn}次: {event_msg.split(chr(10))[0]}")
+                        turn_log.append(f"  ⚠️ 发生事件")
+                
+                summary["turn_summary"].append("\n".join(turn_log))
+                
+                if self.game.game_over:
+                    break
+            
+            text = f"=== 在{location['name']}采集 {quantity} 次 ===\n"
+            
+            if quantity > 1:
+                text += "\n".join(summary["turn_summary"]) + "\n"
+            
+            text += "\n=== 采集汇总 ===\n"
+            if summary["gathered"]:
+                text += "收获物品：\n"
+                for item, amount in sorted(summary["gathered"].items()):
                     text += f"  {ITEMS[item]['name']} x{amount}\n"
-                self.game.log_action(f"在{location['name']}采集资源: {gathered}")
+                    if item == "map_fragment":
+                        text += f"    🗺️  地图碎片进度: {self.game.map_fragments}/{self.game.total_map_fragments}\n"
             else:
-                text = "什么都没找到..."
+                text += "收获物品：无\n"
             
-            advance_msg = self.game.advance_turn(quantity)
-            if advance_msg:
-                text += f"\n{advance_msg}"
+            if summary["tools_used"]:
+                text += "\n工具损耗：\n"
+                for msg in summary["tools_used"]:
+                    text += f"  {msg}\n"
             
-            if random.random() < location["danger"] * 0.3 * quantity:
-                event_msg = self._trigger_random_event()
-                if event_msg:
-                    text += f"\n{event_msg}"
+            if summary["weather_effects"]:
+                text += "\n天气影响：\n"
+                for msg in summary["weather_effects"]:
+                    text += f"  {msg}\n"
+            
+            if summary["events"]:
+                text += "\n遭遇事件：\n"
+                for msg in summary["events"]:
+                    text += f"  {msg}\n"
+            
+            text += f"\n最终状态: 生命{self.game.health}/{self.game.max_health} 饱食{self.game.hunger} 口渴{self.game.thirst}\n"
+            
+            self.game.log_action(f"在{location['name']}采集{quantity}次，收获: {summary['gathered']}")
+            
+            if self.game.game_over:
+                text += f"\n{self.game.check_death()}"
+                if self.game.game_over:
+                    text += f"\n最终得分：{self.game.score}"
             
             return text
         
@@ -219,16 +324,12 @@ save - 存档系统
             
             if location.get("is_ruin", False):
                 if random.random() < 0.4:
-                    self.game.map_fragments += 1
+                    self.game.add_item("map_fragment", 1)
                     text += f"🎉 你发现了一块地图碎片！({self.game.map_fragments}/{self.game.total_map_fragments})\n"
-                    if self.game.map_fragments >= self.game.total_map_fragments:
-                        self.game.victory = True
-                        self.game.ending = "treasure"
-                        self.game.game_over = True
-                        text += "\n🏆 你收集齐了所有地图碎片！你找到了传说中的宝藏！\n"
+                    if self.game.game_over and self.game.victory:
                         ending = ENDINGS["treasure"]
+                        text += "\n🏆 你收集齐了所有地图碎片！你找到了传说中的宝藏！\n"
                         text += f"{ending['description']}\n"
-                        self.game.calculate_score()
                         text += f"\n最终得分：{self.game.score}"
                         return text
                 
@@ -240,6 +341,12 @@ save - 存档系统
                 if random.random() < 0.2:
                     self.game.add_item("map_fragment", 1)
                     text += f"🎉 你发现了一块地图碎片！({self.game.map_fragments}/{self.game.total_map_fragments})\n"
+                    if self.game.game_over and self.game.victory:
+                        ending = ENDINGS["treasure"]
+                        text += "\n🏆 你收集齐了所有地图碎片！你找到了传说中的宝藏！\n"
+                        text += f"{ending['description']}\n"
+                        text += f"\n最终得分：{self.game.score}"
+                        return text
             
             if random.random() < location["danger"] * 0.6:
                 damage = random.randint(10, 25)
@@ -272,13 +379,22 @@ save - 存档系统
             return self._show_inventory()
         elif subcmd == "use":
             if len(args) < 2:
-                return "用法：bag use <物品> [数量]"
+                return "用法：bag use <物品> [数量]\n示例：bag use water 2"
             item_name = args[1]
-            quantity = int(args[2]) if len(args) > 2 else 1
+            
+            if len(args) > 2:
+                success, result = parse_int_param(
+                    args[2], min_val=1, max_val=99, param_name="使用数量"
+                )
+                if not success:
+                    return result + "\n用法：bag use <物品> [数量]"
+                quantity = result
+            else:
+                quantity = 1
             
             item_id = self._find_item_id(item_name)
             if not item_id:
-                return f"找不到物品：{item_name}"
+                return f"找不到物品：{item_name}\n用法：bag use <物品> [数量]"
             
             return self._use_item(item_id, quantity)
         
@@ -361,18 +477,213 @@ save - 存档系统
             result += f"\n{advance_msg}"
         return result
 
+    def _night_defense_combat(self):
+        """夜间防守战斗系统"""
+        config = DIFFICULTY_CONFIG[self.game.difficulty]
+        
+        text = "=== 夜间防守战斗 ===\n\n"
+        
+        # 战斗准备阶段
+        text += "【战斗准备】\n"
+        
+        # 计算玩家攻击力
+        player_attack = 5
+        weapons_used = []
+        for weapon_id, weapon_data in self.game.tools.items():
+            if ITEMS[weapon_id]["type"] == "weapon":
+                atk = ITEMS[weapon_id].get("attack", 0)
+                qty = weapon_data["quantity"]
+                player_attack += atk * qty
+                weapons_used.append(f"{ITEMS[weapon_id]['name']}(攻击+{atk})x{qty}")
+        
+        # 伙伴加成
+        companion_attack = 0
+        companion_defense = 0
+        companion_names = []
+        for comp_id in self.game.companions:
+            comp = COMPANIONS[comp_id]
+            companion_attack += comp["stats"].get("attack", 0)
+            companion_defense += comp["stats"].get("danger_reduction", 0)
+            companion_names.append(comp["name"])
+        
+        total_attack = player_attack + companion_attack
+        
+        # 营地防御
+        camp_defense = self.game.camp["defense_level"] * 10
+        torches = self.game.camp["torches"]
+        torch_bonus = torches * 5
+        
+        text += f"  武器: {', '.join(weapons_used) if weapons_used else '无'}\n"
+        text += f"  伙伴: {', '.join(companion_names) if companion_names else '无'} (攻击+{companion_attack}, 减伤{int(companion_defense*100)}%)\n"
+        text += f"  营地: 防御等级{self.game.camp['defense_level']} (防御+{camp_defense})\n"
+        text += f"  火把: {torches}个 (惊吓加成+{torch_bonus})\n"
+        text += f"  总战斗力: {total_attack} 攻击 / {camp_defense + torch_bonus} 防御\n\n"
+        
+        # 消耗火把
+        if torches > 0:
+            self.game.camp["torches"] -= 1
+            text += "🔥 点燃了1个火把，照亮了营地周围...\n\n"
+        
+        # 判断是否有袭击
+        attack_chance = config["night_attack_chance"]
+        if torches > 0:
+            attack_chance *= 0.7
+        if camp_defense > 0:
+            attack_chance *= 0.8
+        
+        text += "【战斗阶段】\n"
+        
+        old_health = self.game.health
+        
+        if random.random() < attack_chance:
+            # 有袭击
+            beast_types = [
+                ("狼群", 30, 15, 25),
+                ("野猪", 25, 10, 20),
+                ("巨蛇", 20, 15, 30),
+                ("豹子", 35, 20, 35),
+                ("熊", 50, 25, 40),
+            ]
+            beast_name, beast_hp, min_dmg, max_dmg = random.choice(beast_types)
+            
+            text += f"⚠️  一群{beast_name}袭击了营地！\n\n"
+            self.game.log_event(f"夜间袭击: {beast_name}出现")
+            
+            # 多回合战斗
+            round_num = 1
+            beast_current_hp = beast_hp
+            total_damage_taken = 0
+            total_damage_dealt = 0
+            
+            while beast_current_hp > 0 and self.game.health > 0:
+                text += f"--- 第{round_num}回合战斗 ---\n"
+                
+                # 玩家攻击
+                player_damage = random.randint(total_attack - 5, total_attack + 5)
+                player_damage = max(1, player_damage)
+                beast_current_hp -= player_damage
+                total_damage_dealt += player_damage
+                text += f"  你和伙伴们发起攻击，造成 {player_damage} 点伤害！\n"
+                
+                # 武器耐久消耗
+                for weapon_id in list(self.game.tools.keys()):
+                    if ITEMS[weapon_id]["type"] == "weapon":
+                        ok, msg = self.game.use_tool(weapon_id)
+                        if msg:
+                            text += f"  {msg}\n"
+                
+                if beast_current_hp <= 0:
+                    text += f"  {beast_name}被击退了！\n\n"
+                    self.game.log_event(f"击退{beast_name}，造成{total_damage_dealt}点伤害")
+                    break
+                
+                # 野兽攻击
+                beast_damage = random.randint(min_dmg, max_dmg)
+                
+                # 防御减伤
+                defense_reduction = (camp_defense + torch_bonus) / 100
+                beast_damage = int(beast_damage * (1 - defense_reduction))
+                
+                # 伙伴减伤
+                beast_damage = int(beast_damage * (1 - companion_defense))
+                
+                beast_damage = max(1, beast_damage)
+                self.game.health -= beast_damage
+                total_damage_taken += beast_damage
+                
+                text += f"  {beast_name}反击，造成 {beast_damage} 点伤害！\n"
+                
+                # 有防御设施的情况
+                if camp_defense > 0 and random.random() < 0.3:
+                    blocked = random.randint(5, 15)
+                    self.game.health = min(self.game.max_health, self.game.health + blocked)
+                    text += f"  营地防御设施抵挡了 {blocked} 点伤害！\n"
+                
+                if torches > 0 and random.random() < 0.2:
+                    beast_damage = int(beast_damage * 0.5)
+                    text += f"  火把的光芒吓退了{beast_name}，伤害减半！\n"
+                
+                text += f"  {beast_name}剩余生命: {max(0, beast_current_hp)}/{beast_hp}\n"
+                text += f"  你的生命值: {self.game.health}/{self.game.max_health}\n\n"
+                
+                round_num += 1
+                if round_num > 5:
+                    text += f"  经过{round_num-1}回合激战，{beast_name}终于撤退了！\n\n"
+                    break
+            
+            actual_damage = old_health - self.game.health
+            text += f"=== 战斗结算 ===\n"
+            text += f"  战斗回合: {min(round_num, 5)}回合\n"
+            text += f"  造成伤害: {total_damage_dealt}\n"
+            text += f"  受到伤害: {actual_damage}\n"
+            text += f"  最终生命: {self.game.health}/{self.game.max_health}\n"
+            
+            if self.game.health <= 0:
+                self.game.death_cause = "killed_by_beast"
+                self.game.ending = "killed_by_beast"
+                self.game.game_over = True
+                self.game.calculate_score()
+                text += f"\n💀 你在与{beast_name}的战斗中倒下了...\n"
+                ending = ENDINGS["killed_by_beast"]
+                text += f"{ending['name']}: {ending['description']}\n"
+                text += f"最终得分: {self.game.score}"
+                
+                self.game.log_event(f"战斗死亡: 被{beast_name}击败，受到{actual_damage}点伤害")
+        else:
+            # 没有袭击
+            text += "🌙 今夜平安无事，只有虫鸣声和海浪声...\n"
+            
+            # 夜间恢复
+            heal_amount = 5
+            if self.game.camp["has_fire"]:
+                heal_amount += 3
+            for comp in self.game.companions:
+                heal_amount += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 5)
+            
+            old_hp = self.game.health
+            self.game.health = min(self.game.max_health, self.game.health + heal_amount)
+            actual_heal = self.game.health - old_hp
+            text += f"💤 你在营地安心休息，恢复了 {actual_heal} 点生命值。\n"
+            
+            self.game.log_event(f"夜间平安，恢复{actual_heal}点生命")
+        
+        self.game.log_action(f"夜间防守: {'遭遇战斗' if old_health != self.game.health else '平安无事'}")
+        
+        advance_msg = self.game.advance_turn(1)
+        if advance_msg:
+            text += f"\n{advance_msg}"
+        
+        return text
+
     def cmd_craft(self, args):
         if self.game.game_over:
             return "游戏已结束。"
         if not self.game.player_name:
             return "请先开始新游戏。"
+        
+        if not args:
+            return "用法：craft list | make <物品> [数量]\n示例：craft make rope 3"
+        
+        subcmd = args[0]
+        make_quantity = 1
+        
+        if subcmd == "make":
+            # 先验证参数
+            if len(args) < 2:
+                return "用法：craft make <物品> [数量]\n示例：craft make rope 3"
+            
+            if len(args) > 2:
+                success, result = parse_int_param(
+                    args[2], min_val=1, max_val=10, param_name="制作数量"
+                )
+                if not success:
+                    return result + "\n用法：craft make <物品> [数量]，数量范围1-10"
+                make_quantity = result
+        
+        # 再检查是否在营地
         if self.game.current_location != "camp":
             return "必须在营地才能制作物品。"
         
-        if not args:
-            return "用法：craft list | make <物品> [数量]"
-        
-        subcmd = args[0]
         if subcmd == "list":
             text = "=== 可制作配方 ===\n"
             for item_id, recipe in sorted(RECIPES.items()):
@@ -390,14 +701,12 @@ save - 存档系统
             return text
         
         elif subcmd == "make":
-            if len(args) < 2:
-                return "用法：craft make <物品> [数量]"
             item_name = args[1]
-            quantity = int(args[2]) if len(args) > 2 else 1
+            quantity = make_quantity
             
             item_id = self._find_item_id(item_name)
             if not item_id or item_id not in RECIPES:
-                return f"无法制作：{item_name}"
+                return f"无法制作：{item_name}\n用法：craft make <物品> [数量]\n输入 craft list 查看可制作物品"
             
             recipe = RECIPES[item_id]
             
@@ -413,21 +722,84 @@ save - 存档系统
             for comp in self.game.companions:
                 craft_bonus += COMPANIONS[comp]["stats"].get("craft_bonus", 0)
             
-            for mat_id, mat_qty in recipe["materials"].items():
-                self.game.remove_item(mat_id, mat_qty * quantity)
+            summary = {
+                "materials_used": {},
+                "produced": 0,
+                "bonus": False,
+                "turn_summary": []
+            }
             
-            output_qty = recipe.get("quantity", 1) * quantity
-            if random.random() < (craft_bonus - 1) * 0.5:
-                output_qty = int(output_qty * 1.5)
+            for turn in range(1, quantity + 1):
+                turn_log = [f"--- 第{turn}次制作 ---"]
+                old_hunger = self.game.hunger
+                old_thirst = self.game.thirst
+                
+                for mat_id, mat_qty in recipe["materials"].items():
+                    self.game.remove_item(mat_id, mat_qty)
+                    if mat_id in summary["materials_used"]:
+                        summary["materials_used"][mat_id] += mat_qty
+                    else:
+                        summary["materials_used"][mat_id] = mat_qty
+                
+                output_qty = recipe.get("quantity", 1)
+                got_bonus = False
+                if random.random() < (craft_bonus - 1) * 0.5:
+                    output_qty = int(output_qty * 1.5)
+                    got_bonus = True
+                    summary["bonus"] = True
+                
+                self.game.add_item(item_id, output_qty)
+                summary["produced"] += output_qty
+                
+                materials_str = ", ".join([f"{ITEMS[m]['name']}x{n}" for m, n in recipe['materials'].items()])
+                turn_log.append(f"  消耗: {materials_str}")
+                turn_log.append(f"  产出: {ITEMS[item_id]['name']} x{output_qty}{' (工匠加成!)' if got_bonus else ''}")
+                
+                advance_msg = self.game.advance_turn(1)
+                
+                hunger_change = self.game.hunger - old_hunger
+                thirst_change = self.game.thirst - old_thirst
+                if hunger_change != 0 or thirst_change != 0:
+                    changes = []
+                    if hunger_change != 0:
+                        changes.append(f"饱食{hunger_change:+d}")
+                    if thirst_change != 0:
+                        changes.append(f"口渴{thirst_change:+d}")
+                    turn_log.append(f"  状态: {', '.join(changes)}")
+                
+                if advance_msg:
+                    turn_log.append(f"  {advance_msg}")
+                
+                summary["turn_summary"].append("\n".join(turn_log))
+                
+                if self.game.game_over:
+                    break
             
-            self.game.add_item(item_id, output_qty)
-            self.game.log_action(f"制作 {ITEMS[item_id]['name']} x{output_qty}")
+            text = f"=== 制作 {ITEMS[item_id]['name']} x{quantity} ===\n"
             
-            advance_msg = self.game.advance_turn(quantity)
-            result = f"制作成功！获得 {ITEMS[item_id]['name']} x{output_qty}"
-            if advance_msg:
-                result += f"\n{advance_msg}"
-            return result
+            if quantity > 1:
+                text += "\n".join(summary["turn_summary"]) + "\n"
+            
+            text += "\n=== 制作汇总 ===\n"
+            text += "消耗材料：\n"
+            for mat_id, amount in sorted(summary["materials_used"].items()):
+                text += f"  {ITEMS[mat_id]['name']} x{amount}\n"
+            text += f"\n产出物品：\n"
+            text += f"  {ITEMS[item_id]['name']} x{summary['produced']}"
+            if summary["bonus"]:
+                text += " (含工匠加成)"
+            text += "\n"
+            
+            text += f"\n最终状态: 生命{self.game.health}/{self.game.max_health} 饱食{self.game.hunger} 口渴{self.game.thirst}\n"
+            
+            self.game.log_action(f"制作{ITEMS[item_id]['name']}x{quantity}，产出x{summary['produced']}")
+            
+            if self.game.game_over:
+                text += f"\n{self.game.check_death()}"
+                if self.game.game_over:
+                    text += f"\n最终得分：{self.game.score}"
+            
+            return text
         
         return "未知子命令。用法：craft list | make <物品>"
 
@@ -566,26 +938,7 @@ save - 存档系统
             if self.game.time_of_day != "night":
                 return "只有夜间才能进行防守。"
             
-            total_attack = self.game.get_total_attack()
-            text = f"你加强了夜间防守（攻击力：{total_attack}）\n"
-            
-            config = DIFFICULTY_CONFIG[self.game.difficulty]
-            if random.random() < config["night_attack_chance"]:
-                damage = random.randint(10, 25)
-                if total_attack > 20:
-                    damage = damage // 2
-                    text += f"你击退了野兽的袭击，但仍受到 {damage} 点伤害。\n"
-                else:
-                    text += f"野兽袭击了营地，造成 {damage} 点伤害！\n"
-                self.game.health -= damage
-            else:
-                text += "今夜平安无事。\n"
-            
-            self.game.log_action("夜间防守")
-            advance_msg = self.game.advance_turn(1)
-            if advance_msg:
-                text += f"\n{advance_msg}"
-            return text
+            return self._night_defense_combat()
         
         return "未知子命令。用法：camp show | build | cook | purify | heal | defend"
 
@@ -736,35 +1089,48 @@ save - 存档系统
                 return "现在没有商人。可以使用 event trigger 尝试触发商人事件。"
             
             if len(args) < 3:
-                return "用法：event trade buy <物品> [数量] 或 event trade sell <物品> [数量]"
+                return "用法：event trade buy <物品> [数量] 或 event trade sell <物品> [数量]\n示例：event trade buy water 3"
             
             trade_type = args[1]
             item_name = args[2]
-            quantity = int(args[3]) if len(args) > 3 else 1
+            
+            if len(args) > 3:
+                success, result = parse_int_param(
+                    args[3], min_val=1, max_val=99, param_name="交易数量"
+                )
+                if not success:
+                    return result + "\n用法：event trade buy/sell <物品> [数量]"
+                quantity = result
+            else:
+                quantity = 1
             
             item_id = self._find_item_id(item_name)
             if not item_id:
-                return f"找不到物品：{item_name}"
+                return f"找不到物品：{item_name}\n用法：event trade buy/sell <物品> [数量]"
             
             if trade_type == "buy":
                 if item_id not in TRADER_ITEMS["buy"]:
-                    return f"商人不卖 {item_name}"
+                    return f"商人不卖 {item_name}\n输入 event list 查看商人出售的物品"
                 price = TRADER_ITEMS["buy"][item_id]["price"]
                 for currency, amount in price.items():
                     total = amount * quantity
                     if not self.game.has_item(currency, total):
-                        return f"货币不足：需要 {ITEMS[currency]['name']} x{total}"
+                        return f"货币不足：需要 {ITEMS[currency]['name']} x{total}，当前只有 {self.game.get_item_count(currency)}"
                 for currency, amount in price.items():
                     self.game.remove_item(currency, amount * quantity)
                 self.game.add_item(item_id, quantity)
+                
+                if item_id == "map_fragment":
+                    self.game._check_treasure_ending()
+                
                 self.game.log_action(f"从商人购买 {ITEMS[item_id]['name']} x{quantity}")
                 return f"购买成功：{ITEMS[item_id]['name']} x{quantity}"
             
             elif trade_type == "sell":
                 if item_id not in TRADER_ITEMS["sell"]:
-                    return f"商人不收 {item_name}"
+                    return f"商人不收 {item_name}\n商人收购：shell, ancient_coin, gold, iron_ore, iron_ingot"
                 if not self.game.has_item(item_id, quantity):
-                    return f"物品不足：{ITEMS[item_id]['name']}"
+                    return f"物品不足：{ITEMS[item_id]['name']} 需要 x{quantity}，当前只有 {self.game.get_item_count(item_id)}"
                 self.game.remove_item(item_id, quantity)
                 price = TRADER_ITEMS["sell"][item_id]["price"] * quantity
                 self.game.add_item("shell", price)
@@ -836,6 +1202,15 @@ save - 存档系统
                 for item_id, qty in reward.items():
                     self.game.add_item(item_id, qty)
                     text += f"获得 {ITEMS[item_id]['name']} x{qty}\n"
+                    if item_id == "map_fragment":
+                        text += f"    🗺️  地图碎片进度: {self.game.map_fragments}/{self.game.total_map_fragments}\n"
+                
+                if self.game.game_over and self.game.victory and self.game.ending == "treasure":
+                    ending = ENDINGS["treasure"]
+                    text += "\n🏆 你收集齐了所有地图碎片！你找到了传说中的宝藏！\n"
+                    text += f"{ending['description']}\n"
+                    text += f"\n最终得分：{self.game.score}"
+                    return text
             
             if event_id == "find_survivor":
                 available = [c for c in COMPANIONS if c not in self.game.companions]
@@ -1020,25 +1395,92 @@ save - 存档系统
         if not self.game.player_name:
             return "请先开始新游戏。"
         
-        turns = int(args[0]) if args else 1
-        if turns < 1 or turns > 8:
-            return "休息回合数必须在1-8之间。"
-        
-        if self.game.current_location != "camp":
-            heal_amount = turns * 2
-            text = f"你在野外休息了 {turns} 回合，恢复 {heal_amount} 点生命值。\n"
-            self.game.health = min(self.game.max_health, self.game.health + heal_amount)
+        if args:
+            success, result = parse_int_param(
+                args[0], min_val=1, max_val=8, param_name="休息回合数"
+            )
+            if not success:
+                return result + "\n用法：rest [回合数]，回合数范围1-8"
+            turns = result
         else:
-            heal_amount = turns * 5
-            if self.game.camp["has_fire"]:
-                heal_amount += turns * 2
-            for comp in self.game.companions:
-                heal_amount += int(turns * COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 3)
-            text = f"你在营地休息了 {turns} 回合，恢复 {heal_amount} 点生命值。\n"
-            self.game.health = min(self.game.max_health, self.game.health + heal_amount)
+            turns = 1
         
-        self.game.log_action(f"休息 {turns} 回合")
-        advance_msg = self.game.advance_turn(turns)
-        if advance_msg:
-            text += f"\n{advance_msg}"
+        summary = {
+            "total_heal": 0,
+            "weather_effects": [],
+            "events": [],
+            "turn_summary": []
+        }
+        
+        for turn in range(1, turns + 1):
+            turn_log = [f"--- 休息第{turn}回合 ---"]
+            old_health = self.game.health
+            
+            if self.game.current_location != "camp":
+                heal_per_turn = 2
+            else:
+                heal_per_turn = 5
+                if self.game.camp["has_fire"]:
+                    heal_per_turn += 2
+                for comp in self.game.companions:
+                    heal_per_turn += int(COMPANIONS[comp]["stats"].get("heal_bonus", 0) * 3)
+            
+            old_health_before = self.game.health
+            self.game.health = min(self.game.max_health, self.game.health + heal_per_turn)
+            actual_heal = self.game.health - old_health_before
+            summary["total_heal"] += actual_heal
+            
+            turn_log.append(f"  恢复生命值 +{actual_heal}")
+            
+            advance_msg = self.game.advance_turn(1)
+            
+            health_change = self.game.health - old_health
+            if health_change != 0:
+                turn_log.append(f"  生命变化: {health_change:+d}")
+            
+            if self.game.weather != "clear":
+                weather_names = {"storm": "暴风雨", "heatwave": "热浪", "cold_snap": "寒流"}
+                summary["weather_effects"].append(f"第{turn}回合: {weather_names.get(self.game.weather, '恶劣天气')}")
+            
+            if advance_msg:
+                turn_log.append(f"  {advance_msg}")
+            
+            event_msg = self._trigger_random_event()
+            if event_msg:
+                summary["events"].append(f"第{turn}回合: {event_msg.split(chr(10))[0]}")
+                turn_log.append(f"  ⚠️ 发生事件")
+            
+            summary["turn_summary"].append("\n".join(turn_log))
+            
+            if self.game.game_over:
+                break
+        
+        location = "野外" if self.game.current_location != "camp" else "营地"
+        text = f"=== 在{location}休息 {turns} 回合 ===\n"
+        
+        if turns > 1:
+            text += "\n".join(summary["turn_summary"]) + "\n"
+        
+        text += "\n=== 休息汇总 ===\n"
+        text += f"总恢复生命值: +{summary['total_heal']}\n"
+        
+        if summary["weather_effects"]:
+            text += "\n天气影响：\n"
+            for msg in summary["weather_effects"]:
+                text += f"  {msg}\n"
+        
+        if summary["events"]:
+            text += "\n遭遇事件：\n"
+            for msg in summary["events"]:
+                text += f"  {msg}\n"
+        
+        text += f"\n最终状态: 生命{self.game.health}/{self.game.max_health} 饱食{self.game.hunger} 口渴{self.game.thirst}\n"
+        
+        self.game.log_action(f"在{location}休息{turns}回合，恢复+{summary['total_heal']}生命")
+        
+        if self.game.game_over:
+            text += f"\n{self.game.check_death()}"
+            if self.game.game_over:
+                text += f"\n最终得分：{self.game.score}"
+        
         return text

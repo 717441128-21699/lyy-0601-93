@@ -91,6 +91,27 @@ class GameState:
                 if item_id not in self.inventory:
                     self.inventory[item_id] = 0
                 self.inventory[item_id] += quantity
+            
+            if item_id == "map_fragment":
+                self._sync_map_fragments()
+                self._check_treasure_ending()
+            
+            return True
+        return False
+    
+    def _sync_map_fragments(self):
+        """同步地图碎片进度，确保 inventory 中的数量和 map_fragments 一致"""
+        inv_count = self.inventory.get("map_fragment", 0)
+        if inv_count != self.map_fragments:
+            self.map_fragments = inv_count
+    
+    def _check_treasure_ending(self):
+        """检查是否收集齐所有地图碎片，触发宝藏结局"""
+        if self.map_fragments >= self.total_map_fragments and not self.game_over:
+            self.victory = True
+            self.ending = "treasure"
+            self.game_over = True
+            self.calculate_score()
             return True
         return False
 
@@ -106,6 +127,10 @@ class GameState:
                 self.inventory[item_id] -= quantity
                 if self.inventory[item_id] <= 0:
                     del self.inventory[item_id]
+                
+                if item_id == "map_fragment":
+                    self._sync_map_fragments()
+                
                 return True
         return False
 
@@ -387,6 +412,8 @@ class GameState:
         self.trader_available = data.get("trader_available", False)
         self.weather = data.get("weather", "clear")
         self.weather_forecast = data.get("weather_forecast", None)
+        
+        self._sync_map_fragments()
         
         return True, f"已加载存档：{slot_name}（保存于 {data.get('saved_at', '未知时间')}）"
 
